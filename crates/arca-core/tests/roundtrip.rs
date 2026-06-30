@@ -6,6 +6,7 @@ use arca_core::{
     CompressOptions, Encryption, ExitCode, ExtractOptions, Password, TestOptions, compress,
     extract, list, test,
 };
+#[cfg(unix)]
 use filetime::{FileTime, set_file_times};
 use flate2::{Compression, write::GzEncoder};
 use tar::{Builder as TarBuilder, EntryType, Header};
@@ -1289,6 +1290,7 @@ fn assert_password_error<T>(result: arca_core::ArcaResult<T>) {
     );
 }
 
+#[cfg(unix)]
 fn assert_non_utf8_path_error<T>(result: arca_core::ArcaResult<T>) {
     let err = match result {
         Ok(_) => panic!("expected non-UTF-8 path error"),
