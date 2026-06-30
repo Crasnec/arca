@@ -1,0 +1,22 @@
+[package]
+name = "arca-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "arca"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+arca-core = { path = "../arca-core" }
+clap.workspace = true
+rpassword.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

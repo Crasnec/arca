@@ -1,0 +1,26 @@
+[package]
+name = "arca-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bzip2.workspace = true
+filetime.workspace = true
+flate2.workspace = true
+globset.workspace = true
+serde.workspace = true
+sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+walkdir.workspace = true
+xz2.workspace = true
+zeroize.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

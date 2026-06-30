@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "README.md"
+      - "LICENSE"
+      - ".gitignore"
+      - "crates/**"
+      - "tests/**"
+      - "scripts/**"
+      - "docs/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/release.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "README.md"
+      - "LICENSE"
+      - ".gitignore"
+      - "crates/**"
+      - "tests/**"
+      - "scripts/**"
+      - "docs/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: .
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+
+      - name: Install 7-Zip on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full
+
+      - name: Install 7-Zip on macOS
+        if: runner.os == 'macOS'
+        run: brew install p7zip
+
+      - name: Add 7-Zip to PATH on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path "C:\Program Files\7-Zip") {
+            "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } else {
+            choco install 7zip -y
+          }
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: License check
+        run: node ./scripts/license-check.mjs --check docs/third-party-licenses.md
+
+      - name: Version check
+        run: node ./scripts/version-check.mjs
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Smoke
+        if: runner.os != 'Windows'
+        run: ARCA_REQUIRE_7ZIP=1 ./scripts/smoke.sh
+
+      - name: Smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:ARCA_REQUIRE_7ZIP = "1"
+          ./scripts/smoke.ps1
+
+      - name: Package dry run
+        if: runner.os != 'Windows'
+        run: bash ./scripts/package.sh
+
+      - name: Package dry run
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package.ps1
+
+      - name: Compatibility fixtures dry run
+        if: runner.os == 'Linux'
+        run: ARCA_REQUIRE_7ZIP=1 bash ./scripts/compat-fixtures.sh
+
+      - name: Source archive dry run
+        if: runner.os == 'Linux'
+        run: bash ./scripts/source-archive.sh
+
+      - name: Release asset verification dry run
+        if: runner.os == 'Linux'
+        run: |
+          rm -rf release-assets
+          mkdir release-assets
+          cp arca-*.tar.gz arca-*.tar.gz.sha256 release-assets/
+          expected="arca-linux-x86_64.tar.gz arca-linux-x86_64.tar.gz.sha256"
+          expected="$expected arca-compat-fixtures.tar.gz arca-compat-fixtures.tar.gz.sha256"
+          expected="$expected arca-source.tar.gz arca-source.tar.gz.sha256"
+          ARCA_EXPECTED_RELEASE_ASSETS="$expected" \
+            bash ./scripts/verify-release-assets.sh release-assets

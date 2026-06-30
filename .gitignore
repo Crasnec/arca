@@ -1,0 +1,11 @@
+/target/
+/dist/
+/arca-*.tar.gz
+/arca-*.tar.gz.sha256
+/arca-*.zip
+/arca-*.zip.sha256
+/arca-compat-fixtures*.tar.gz
+/arca-compat-fixtures*.tar.gz.sha256
+/arca-source*.tar.gz
+/arca-source*.tar.gz.sha256
+*.tmp

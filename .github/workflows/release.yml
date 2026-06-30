@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: .
+
+jobs:
+  package:
+    name: package (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+            archive: arca-linux-x86_64.tar.gz
+            binary: arca
+          - os: macos-latest
+            name: macos-native
+            archive: arca-macos-native.tar.gz
+            binary: arca
+          - os: windows-latest
+            name: windows-x86_64
+            archive: arca-windows-x86_64.zip
+            binary: arca.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+
+      - name: Install 7-Zip on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full
+
+      - name: Install 7-Zip on macOS
+        if: runner.os == 'macOS'
+        run: brew install p7zip
+
+      - name: Add 7-Zip to PATH on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path "C:\Program Files\7-Zip") {
+            "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } else {
+            choco install 7zip -y
+          }
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: License check
+        run: node ./scripts/license-check.mjs --check docs/third-party-licenses.md
+
+      - name: Version check
+        run: node ./scripts/version-check.mjs
+
+      - name: Build release binary
+        run: cargo build --release --locked --bin arca
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Smoke
+        if: runner.os != 'Windows'
+        run: |
+          ARCA_BIN="target/release/${{ matrix.binary }}" \
+          ARCA_REQUIRE_7ZIP=1 \
+          ./scripts/smoke.sh
+
+      - name: Smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:ARCA_BIN = "target\release\${{ matrix.binary }}"
+          $env:ARCA_REQUIRE_7ZIP = "1"
+          ./scripts/smoke.ps1
+
+      - name: Package Unix artifact
+        if: runner.os != 'Windows'
+        run: |
+          ARCA_BIN="target/release/${{ matrix.binary }}" \
+          ARCA_ARCHIVE="${{ matrix.archive }}" \
+          bash ./scripts/package.sh
+
+      - name: Package Windows artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:ARCA_BIN = "target\release\${{ matrix.binary }}"
+          $env:ARCA_ARCHIVE = "${{ matrix.archive }}"
+          ./scripts/package.ps1
+
+      - name: Build compatibility fixtures
+        if: matrix.name == 'linux-x86_64'
+        run: |
+          ARCA_BIN="target/release/${{ matrix.binary }}" \
+          ARCA_REQUIRE_7ZIP=1 \
+          ARCA_COMPAT_ARCHIVE="arca-compat-fixtures.tar.gz" \
+          bash ./scripts/compat-fixtures.sh
+
+      - name: Build source archive
+        if: matrix.name == 'linux-x86_64'
+        run: |
+          ARCA_SOURCE_ARCHIVE="arca-source.tar.gz" \
+          bash ./scripts/source-archive.sh
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: |
+            ${{ matrix.archive }}
+            ${{ matrix.archive }}.sha256
+
+      - name: Upload compatibility fixtures
+        if: matrix.name == 'linux-x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arca-compat-fixtures.tar.gz
+          path: |
+            arca-compat-fixtures.tar.gz
+            arca-compat-fixtures.tar.gz.sha256
+
+      - name: Upload source archive
+        if: matrix.name == 'linux-x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: arca-source.tar.gz
+          path: |
+            arca-source.tar.gz
+            arca-source.tar.gz.sha256
+
+  publish:
+    name: publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: find release-assets -maxdepth 1 -type f | sort
+
+      - name: Verify release assets
+        run: bash ./scripts/verify-release-assets.sh release-assets
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
