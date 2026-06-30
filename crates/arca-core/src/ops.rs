@@ -1896,6 +1896,9 @@ fn apply_entry_metadata(
     modified: Option<UnixTime>,
     symlink: bool,
 ) -> ArcaResult<()> {
+    #[cfg(not(unix))]
+    let _ = mode;
+
     #[cfg(unix)]
     if !symlink && let Some(mode) = mode {
         use std::os::unix::fs::PermissionsExt;

@@ -13,18 +13,25 @@ rm -rf "$root/dist/source-check"
 mkdir -p "$root/dist"
 rm -f "$archive_path" "$archive_path.sha256"
 
+source_paths=(
+  Cargo.toml
+  Cargo.lock
+  LICENSE
+  README.md
+  .gitignore
+  .github
+  crates
+  docs
+  scripts
+)
+
+if [[ -d "$root/tests" ]]; then
+  source_paths+=(tests)
+fi
+
 tar -C "$root" -czf "$archive_path" \
   --transform 's,^,arca-source/,' \
-  Cargo.toml \
-  Cargo.lock \
-  LICENSE \
-  README.md \
-  .gitignore \
-  .github \
-  crates \
-  tests \
-  docs \
-  scripts
+  "${source_paths[@]}"
 
 mkdir -p "$root/dist/source-check"
 tar -C "$root/dist/source-check" -xzf "$archive_path"
