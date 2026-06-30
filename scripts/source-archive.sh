@@ -19,6 +19,7 @@ source_paths=(
   LICENSE
   README.md
   .gitignore
+  .gitattributes
   .github
   crates
   docs

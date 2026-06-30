@@ -76,6 +76,7 @@ require_checksum_manifest() {
   fi
 
   IFS= read -r line < "$checksum"
+  line="${line%$'\r'}"
   read -r hash name extra <<< "$line"
   if [[ -n "${extra:-}" || -z "${hash:-}" || -z "${name:-}" ]]; then
     echo "checksum file has invalid format: $(basename "$checksum")" >&2
@@ -386,6 +387,7 @@ require_archive_entries arca-source.tar.gz \
   arca-source/Cargo.lock \
   arca-source/LICENSE \
   arca-source/README.md \
+  arca-source/.gitattributes \
   arca-source/docs/package-readme.md \
   arca-source/docs/third-party-licenses.md \
   arca-source/.github/workflows/ci.yml \
