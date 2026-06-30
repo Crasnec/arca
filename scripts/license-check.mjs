@@ -69,7 +69,7 @@ if (writePath) {
   writeFileSync(resolve(root, writePath), document);
 }
 if (checkPath) {
-  const current = readFileSync(resolve(root, checkPath), "utf8");
+  const current = readFileSync(resolve(root, checkPath), "utf8").replace(/\r\n?/g, "\n");
   if (current !== document) {
     process.stderr.write(`${checkPath} is not up to date; run:\n`);
     process.stderr.write(`  node ./scripts/license-check.mjs --write ${checkPath}\n`);
