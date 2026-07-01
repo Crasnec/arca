@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "linux")]

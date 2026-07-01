@@ -163,6 +163,7 @@ impl CommandError {
         }
     }
 
+    #[cfg(not(windows))]
     fn unsupported(message: impl Into<String>) -> Self {
         Self {
             code: "unsupported",
