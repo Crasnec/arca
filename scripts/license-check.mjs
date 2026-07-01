@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -15,12 +15,16 @@ const allowed = new Set([
   "0BSD",
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
   "bzip2-1.0.6",
+  "CC-BY-4.0",
   "CC0-1.0",
   "GPL-3.0-or-later",
+  "ISC",
   "LGPL-2.1-or-later",
   "MIT",
   "MIT-0",
+  "MPL-2.0",
   "Unicode-3.0",
   "Unlicense",
   "Zlib",
@@ -29,22 +33,28 @@ const allowed = new Set([
 const metadata = spawnSync(
   "cargo",
   ["metadata", "--format-version=1", "--locked"],
-  { cwd: root, encoding: "utf8" },
+  { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
 );
 if (metadata.status !== 0) {
   process.stderr.write(metadata.stderr);
-  process.stderr.write(metadata.stdout);
+  if (metadata.error) {
+    process.stderr.write(`${metadata.error.message}\n`);
+  }
   process.exit(metadata.status ?? 1);
 }
 
-const packages = JSON.parse(metadata.stdout).packages
+const cargoPackages = JSON.parse(metadata.stdout).packages
   .map((pkg) => ({
+    ecosystem: "cargo",
     name: pkg.name,
     version: pkg.version,
     license: pkg.license,
     licenseFile: pkg.license_file,
-  }))
-  .sort((a, b) => `${a.name} ${a.version}`.localeCompare(`${b.name} ${b.version}`));
+  }));
+const npmPackages = readNpmPackages();
+const packages = [...cargoPackages, ...npmPackages].sort((a, b) =>
+  `${a.ecosystem} ${a.name} ${a.version}`.localeCompare(`${b.ecosystem} ${b.name} ${b.version}`),
+);
 
 const failures = [];
 for (const pkg of packages) {
@@ -77,7 +87,26 @@ if (checkPath) {
   }
 }
 
-console.log(`license check ok: ${packages.length} packages`);
+console.log(
+  `license check ok: ${packages.length} packages (${cargoPackages.length} cargo, ${npmPackages.length} npm)`,
+);
+
+function readNpmPackages() {
+  const lockPath = resolve(root, "package-lock.json");
+  if (!existsSync(lockPath)) {
+    return [];
+  }
+  const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+  return Object.entries(lock.packages ?? {})
+    .filter(([path, pkg]) => path.startsWith("node_modules/") && !pkg.link)
+    .map(([path, pkg]) => ({
+      ecosystem: "npm",
+      name: path.replace(/^node_modules\//, ""),
+      version: pkg.version,
+      license: pkg.license,
+      licenseFile: null,
+    }));
+}
 
 function licenseAtoms(expression) {
   return expression
@@ -95,12 +124,14 @@ function renderMarkdown(rows) {
     "This file is generated from `cargo metadata --locked` by `scripts/license-check.mjs`.",
     "Arca itself is licensed as GPL-3.0-or-later.",
     "",
-    "| Package | Version | License |",
-    "| --- | --- | --- |",
+    "This file includes Cargo and npm dependencies.",
+    "",
+    "| Ecosystem | Package | Version | License |",
+    "| --- | --- | --- | --- |",
   ];
   for (const row of rows) {
     lines.push(
-      `| ${escapeCell(row.name)} | ${escapeCell(row.version)} | ${escapeCell(row.license)} |`,
+      `| ${escapeCell(row.ecosystem)} | ${escapeCell(row.name)} | ${escapeCell(row.version)} | ${escapeCell(row.license)} |`,
     );
   }
   lines.push("");

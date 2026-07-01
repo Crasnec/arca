@@ -1,0 +1,14 @@
+{
+  "name": "arca-workspace",
+  "private": true,
+  "workspaces": [
+    "apps/arca-gui"
+  ],
+  "scripts": {
+    "gui:dev": "npm --workspace @arca/gui run tauri:dev",
+    "gui:build": "npm --workspace @arca/gui run tauri:build",
+    "gui:web:build": "npm --workspace @arca/gui run build",
+    "gui:typecheck": "npm --workspace @arca/gui run typecheck",
+    "gui:smoke": "node ./scripts/gui-smoke.mjs"
+  }
+}

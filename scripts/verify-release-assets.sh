@@ -385,9 +385,24 @@ require_archive_prefix arca-source.tar.gz arca-source
 require_archive_entries arca-source.tar.gz \
   arca-source/Cargo.toml \
   arca-source/Cargo.lock \
+  arca-source/package.json \
+  arca-source/package-lock.json \
   arca-source/LICENSE \
   arca-source/README.md \
   arca-source/.gitattributes \
+  arca-source/apps/arca-gui/package.json \
+  arca-source/apps/arca-gui/src/main.tsx \
+  arca-source/apps/arca-gui/src/styles.css \
+  arca-source/apps/arca-gui/src-tauri/Cargo.toml \
+  arca-source/apps/arca-gui/src-tauri/tauri.conf.json \
+  arca-source/apps/arca-gui/src-tauri/capabilities/main.json \
+  arca-source/apps/arca-gui/src-tauri/icons/arca-icon-source.png \
+  arca-source/apps/arca-gui/src-tauri/icons/32x32.png \
+  arca-source/apps/arca-gui/src-tauri/icons/128x128.png \
+  arca-source/apps/arca-gui/src-tauri/icons/128x128@2x.png \
+  arca-source/apps/arca-gui/src-tauri/icons/icon.icns \
+  arca-source/apps/arca-gui/src-tauri/icons/icon.ico \
+  arca-source/apps/arca-gui/src-tauri/windows/nsis-shell-context.nsh \
   arca-source/docs/package-readme.md \
   arca-source/docs/third-party-licenses.md \
   arca-source/.github/workflows/ci.yml \
@@ -396,6 +411,7 @@ require_archive_entries arca-source.tar.gz \
   arca-source/crates/arca-cli/src/main.rs \
   arca-source/scripts/package.sh \
   arca-source/scripts/package.ps1 \
+  arca-source/scripts/gui-smoke.mjs \
   arca-source/scripts/verify-compat-extract.mjs \
   arca-source/scripts/version-check.mjs
 require_archive_entry_matches_file arca-source.tar.gz arca-source/LICENSE LICENSE

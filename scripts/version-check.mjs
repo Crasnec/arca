@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { existsSync, readFileSync } from "node:fs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -19,11 +20,13 @@ if (tagIndex >= 0 && !explicitTag) {
 const metadata = spawnSync(
   "cargo",
   ["metadata", "--format-version=1", "--locked"],
-  { cwd: root, encoding: "utf8" },
+  { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
 );
 if (metadata.status !== 0) {
   process.stderr.write(metadata.stderr);
-  process.stderr.write(metadata.stdout);
+  if (metadata.error) {
+    process.stderr.write(`${metadata.error.message}\n`);
+  }
   process.exit(metadata.status ?? 1);
 }
 
@@ -49,6 +52,16 @@ if (mismatched.length > 0) {
     ].join("\n"),
   );
 }
+const npmPackages = readNpmWorkspacePackages();
+const mismatchedNpm = npmPackages.filter((pkg) => pkg.version !== expected);
+if (mismatchedNpm.length > 0) {
+  fail(
+    [
+      `npm workspace package versions must match arca-cli ${expected}`,
+      ...mismatchedNpm.map((pkg) => `  ${pkg.name}: ${pkg.version}`),
+    ].join("\n"),
+  );
+}
 
 if (tag) {
   if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/.test(tag)) {
@@ -64,8 +77,17 @@ if (printVersion) {
   console.log(expected);
 } else {
   console.log(
-    `version check ok: ${packages.map((pkg) => `${pkg.name} ${pkg.version}`).join(", ")}`,
+    `version check ok: ${[...packages, ...npmPackages].map((pkg) => `${pkg.name} ${pkg.version}`).join(", ")}`,
   );
+}
+
+function readNpmWorkspacePackages() {
+  const packagePath = resolve(root, "apps/arca-gui/package.json");
+  if (!existsSync(packagePath)) {
+    return [];
+  }
+  const pkg = JSON.parse(readFileSync(packagePath, "utf8"));
+  return [{ name: pkg.name, version: pkg.version }];
 }
 
 function fail(message) {

@@ -16,11 +16,14 @@ rm -f "$archive_path" "$archive_path.sha256"
 source_paths=(
   Cargo.toml
   Cargo.lock
+  package.json
+  package-lock.json
   LICENSE
   README.md
   .gitignore
   .gitattributes
   .github
+  apps
   crates
   docs
   scripts
@@ -31,6 +34,8 @@ if [[ -d "$root/tests" ]]; then
 fi
 
 tar -C "$root" -czf "$archive_path" \
+  --exclude=apps/arca-gui/dist \
+  --exclude=apps/arca-gui/node_modules \
   --transform 's,^,arca-source/,' \
   "${source_paths[@]}"
 
@@ -47,6 +52,18 @@ cargo test \
   --locked \
   --no-run \
   --manifest-path "$root/dist/source-check/arca-source/Cargo.toml" \
+  >/dev/null
+npm ci \
+  --ignore-scripts \
+  --prefix "$root/dist/source-check/arca-source" \
+  >/dev/null
+npm run \
+  --prefix "$root/dist/source-check/arca-source" \
+  gui:smoke \
+  >/dev/null
+npm run \
+  --prefix "$root/dist/source-check/arca-source" \
+  gui:web:build \
   >/dev/null
 
 if command -v sha256sum >/dev/null 2>&1; then

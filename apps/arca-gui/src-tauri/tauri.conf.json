@@ -1,0 +1,109 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Arca",
+  "mainBinaryName": "arca-gui",
+  "version": "0.1.0",
+  "identifier": "com.crasnec.arca",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Arca",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 840,
+        "minHeight": 520,
+        "devtools": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Utility",
+    "shortDescription": "Arca archive manager",
+    "longDescription": "A desktop archive manager for Arca.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "installerHooks": "windows/nsis-shell-context.nsh"
+      }
+    },
+    "fileAssociations": [
+      {
+        "name": "Arca ZIP Archive",
+        "description": "ZIP archive file",
+        "ext": ["zip"],
+        "role": "Viewer",
+        "mimeType": "application/zip"
+      },
+      {
+        "name": "Arca Tar Archive",
+        "description": "Tar archive file",
+        "ext": ["tar"],
+        "role": "Viewer",
+        "mimeType": "application/x-tar"
+      },
+      {
+        "name": "Arca Gzip Archive",
+        "description": "Tar archive compressed with gzip",
+        "ext": ["tgz"],
+        "role": "Viewer",
+        "mimeType": "application/x-compressed-tar"
+      },
+      {
+        "name": "Arca Bzip2 Archive",
+        "description": "Tar archive compressed with bzip2",
+        "ext": ["tbz2"],
+        "role": "Viewer",
+        "mimeType": "application/x-bzip-compressed-tar"
+      },
+      {
+        "name": "Arca XZ Archive",
+        "description": "Tar archive compressed with xz",
+        "ext": ["txz"],
+        "role": "Viewer",
+        "mimeType": "application/x-xz-compressed-tar"
+      },
+      {
+        "name": "Arca Gzip Stream",
+        "description": "Single-file gzip stream",
+        "ext": ["gz"],
+        "role": "Viewer",
+        "mimeType": "application/gzip"
+      },
+      {
+        "name": "Arca Bzip2 Stream",
+        "description": "Single-file bzip2 stream",
+        "ext": ["bz2"],
+        "role": "Viewer",
+        "mimeType": "application/x-bzip2"
+      },
+      {
+        "name": "Arca XZ Stream",
+        "description": "Single-file xz stream",
+        "ext": ["xz"],
+        "role": "Viewer",
+        "mimeType": "application/x-xz"
+      }
+    ]
+  }
+}

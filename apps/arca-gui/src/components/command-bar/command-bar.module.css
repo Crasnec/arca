@@ -1,0 +1,53 @@
+.bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+  padding: var(--toolbar-padding-y) 6px;
+  border-bottom: 1px solid var(--win-border);
+  background: #f3f3f3;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 3px;
+  min-width: var(--command-button-min-width);
+  max-width: 78px;
+  height: var(--command-button-height);
+  padding: 4px 8px 3px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--win-text);
+  background: transparent;
+}
+
+.button:not(:disabled):hover {
+  border-color: #c7dffc;
+  background: var(--win-control-hover);
+}
+
+.button:disabled {
+  color: #9b9b9b;
+  background: #f2f2f2;
+}
+
+.button span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.separator {
+  align-self: center;
+  width: 1px;
+  height: calc(var(--command-button-height) - 8px);
+  margin: 0 5px;
+  border-left: 1px solid #d7d7d7;
+  background: transparent;
+}

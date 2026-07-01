@@ -21,6 +21,12 @@ pub enum ArcaError {
     #[error("corrupt archive or integrity failure: {0}")]
     Integrity(String),
 
+    #[error("operation already in progress: {0}")]
+    Busy(String),
+
+    #[error("operation canceled: {0}")]
+    Canceled(String),
+
     #[error("path is not valid UTF-8: {0}")]
     NonUtf8Path(PathBuf),
 
@@ -64,6 +70,7 @@ impl From<&ArcaError> for ExitCode {
             ArcaError::Security(_) | ArcaError::NonUtf8Path(_) => ExitCode::Security,
             ArcaError::Password(_) => ExitCode::Password,
             ArcaError::Integrity(_) => ExitCode::Integrity,
+            ArcaError::Busy(_) | ArcaError::Canceled(_) => ExitCode::Interrupted,
             ArcaError::Zip(zip::result::ZipError::InvalidPassword) => ExitCode::Password,
             ArcaError::Zip(zip::result::ZipError::UnsupportedArchive(msg))
                 if *msg == zip::result::ZipError::PASSWORD_REQUIRED =>

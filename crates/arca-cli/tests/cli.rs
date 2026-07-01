@@ -25,7 +25,11 @@ fn output_with_stdin(mut command: Command, stdin: &[u8]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.as_mut().unwrap().write_all(stdin).unwrap();
+    if let Err(error) = child.stdin.as_mut().unwrap().write_all(stdin)
+        && error.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        panic!("failed to write command stdin: {error}");
+    }
     child.wait_with_output().unwrap()
 }
 

@@ -6,10 +6,13 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "package.json"
+      - "package-lock.json"
       - "README.md"
       - "LICENSE"
       - ".gitignore"
       - ".gitattributes"
+      - "apps/**"
       - "crates/**"
       - "tests/**"
       - "scripts/**"
@@ -20,10 +23,13 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "package.json"
+      - "package-lock.json"
       - "README.md"
       - "LICENSE"
       - ".gitignore"
       - ".gitattributes"
+      - "apps/**"
       - "crates/**"
       - "tests/**"
       - "scripts/**"
@@ -54,11 +60,20 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
 
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install GUI dependencies
+        run: npm ci
+
       - name: Install 7-Zip on Linux
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y p7zip-full
+          sudo apt-get install -y p7zip-full libdbus-1-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Install 7-Zip on macOS
         if: runner.os == 'macOS'
@@ -85,6 +100,15 @@ jobs:
 
       - name: Version check
         run: node ./scripts/version-check.mjs
+
+      - name: GUI smoke
+        run: npm run gui:smoke
+
+      - name: GUI typecheck
+        run: npm run gui:typecheck
+
+      - name: GUI web build
+        run: npm run gui:web:build
 
       - name: Test
         run: cargo test --workspace --locked

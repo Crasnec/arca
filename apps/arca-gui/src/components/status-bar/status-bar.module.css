@@ -1,0 +1,80 @@
+.statusBar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  padding: 0;
+  border-top: 1px solid var(--win-border);
+  color: #4f4f4f;
+  background: #f8f8f8;
+  font-size: 12px;
+}
+
+.statusBar > span {
+  min-width: 0;
+  height: 100%;
+  padding: 3px 9px 0;
+  border-right: 1px solid #e1e1e1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operationStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 320px;
+  max-width: 520px;
+}
+
+.operationMessage {
+  flex: 1 1 auto;
+}
+
+.operationProgress {
+  position: relative;
+  flex: 0 0 96px;
+  width: 96px;
+  height: 6px;
+  border: 1px solid #b8c2cf;
+  border-radius: 999px;
+  background: #ededed;
+}
+
+.operationProgress span {
+  display: block;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--win-accent);
+}
+
+.indeterminate span {
+  width: 35%;
+  animation: operation-progress-slide 1.1s ease-in-out infinite alternate;
+}
+
+.operationProgressLabel {
+  flex: 0 0 42px;
+  text-align: right;
+}
+
+@keyframes operation-progress-slide {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(178%);
+  }
+}
+
+.statusOk {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: #0f6c38;
+}

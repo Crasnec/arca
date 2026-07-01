@@ -1,10 +1,19 @@
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use arca_core::{
-    CompressOptions, Encryption, ExitCode, ExtractOptions, Password, TestOptions, compress,
-    extract, list, test,
+    ArcaError, CancellationToken, CompressOptions, CoreProgress, CoreProgressPhase,
+    DeleteSelectionOptions, DirectEditPendingEntry, DirectEditSaveOptions, Encryption, ExitCode,
+    ExtractOptions, ExtractSelectionOptions, OperationContext, Password, PlanDirectEditAddOptions,
+    ProgressSink, TestOptions, TestSelectionOptions, compress, compress_with_context,
+    delete_selection, extract, extract_selection, extract_with_context, inspect_archive, list,
+    list_with_context, plan_direct_edit_add, save_direct_edit, save_direct_edit_with_context, test,
+    test_selection, test_with_context,
 };
 #[cfg(unix)]
 use filetime::{FileTime, set_file_times};
@@ -58,6 +67,103 @@ fn assert_numbered_output(output: &Path, count: usize) {
     }
 }
 
+fn cancel_on_phase(phase: CoreProgressPhase) -> OperationContext {
+    let token = CancellationToken::new();
+    let cancel = token.clone();
+    OperationContext::new(token).with_progress_sink(ProgressSink::new(move |progress| {
+        if progress.phase == phase {
+            cancel.cancel();
+        }
+    }))
+}
+
+fn cancel_on_phase_after_phase(
+    phase: CoreProgressPhase,
+    after_phase: CoreProgressPhase,
+) -> OperationContext {
+    let token = CancellationToken::new();
+    let cancel = token.clone();
+    let saw_after_phase = Arc::new(AtomicBool::new(false));
+    let progress_saw_after_phase = Arc::clone(&saw_after_phase);
+    OperationContext::new(token).with_progress_sink(ProgressSink::new(move |progress| {
+        if progress.phase == after_phase {
+            progress_saw_after_phase.store(true, Ordering::SeqCst);
+        }
+        if progress.phase == phase && progress_saw_after_phase.load(Ordering::SeqCst) {
+            cancel.cancel();
+        }
+    }))
+}
+
+fn assert_canceled<T>(result: arca_core::ArcaResult<T>) {
+    match result {
+        Err(ArcaError::Canceled(_)) => {}
+        Err(err) => panic!("expected canceled error, got {err}"),
+        Ok(_) => panic!("expected canceled error"),
+    }
+}
+
+fn assert_no_arca_temp_entries(root: &Path) {
+    let leftovers = fs::read_dir(root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with(".arca-"))
+        .collect::<Vec<_>>();
+    assert!(
+        leftovers.is_empty(),
+        "operation left Arca temp entries: {leftovers:?}"
+    );
+}
+
+fn recording_context() -> (OperationContext, Arc<Mutex<Vec<CoreProgress>>>) {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let progress_events = Arc::clone(&events);
+    let context = OperationContext::new(CancellationToken::new()).with_progress_sink(
+        ProgressSink::new(move |progress| {
+            progress_events.lock().unwrap().push(progress);
+        }),
+    );
+    (context, events)
+}
+
+fn recorded_events(events: &Arc<Mutex<Vec<CoreProgress>>>) -> Vec<CoreProgress> {
+    events.lock().unwrap().clone()
+}
+
+fn numbered_payload_size(count: usize) -> u64 {
+    (0..count)
+        .map(|index| format!("payload {index}\n").len() as u64)
+        .sum()
+}
+
+fn assert_monotonic_progress(
+    events: &[CoreProgress],
+    phase: CoreProgressPhase,
+    message: &str,
+    expected_total: u64,
+) {
+    let filtered = events
+        .iter()
+        .filter(|progress| progress.phase == phase && progress.message == message)
+        .collect::<Vec<_>>();
+    assert!(
+        !filtered.is_empty(),
+        "missing progress events for {phase:?}: {message}"
+    );
+    let mut previous = 0;
+    for progress in filtered {
+        assert_eq!(progress.total, Some(expected_total), "{message}");
+        let processed = progress.processed.expect("progress must be determinate");
+        assert!(
+            processed >= previous,
+            "{message} progress moved backwards: {processed} < {previous}"
+        );
+        previous = processed;
+    }
+    assert_eq!(previous, expected_total, "{message} did not finish");
+}
+
 #[test]
 fn zip_roundtrip_single_directory_contents() {
     let dir = tempdir().unwrap();
@@ -92,6 +198,667 @@ fn zip_roundtrip_single_directory_contents() {
         fs::read_to_string(out.join("sub/data.txt")).unwrap(),
         "nested\n"
     );
+}
+
+#[test]
+fn selection_extracts_only_requested_directory_subtree() {
+    for suffix in ["zip", "tar.gz"] {
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("input");
+        fs::create_dir_all(input.join("sub")).unwrap();
+        fs::write(input.join("README.txt"), format!("root {suffix}\n")).unwrap();
+        fs::write(input.join("sub/data.txt"), "nested\n").unwrap();
+
+        let archive = dir.path().join(format!("input.{suffix}"));
+        compress(base_compress(input, archive.clone())).unwrap();
+
+        test_selection(TestSelectionOptions {
+            archive: archive.clone(),
+            jobs: 2,
+            password: None,
+            entries: vec!["sub/".into()],
+        })
+        .unwrap();
+
+        let out = dir.path().join("selected");
+        extract_selection(ExtractSelectionOptions {
+            archive,
+            output: Some(out.clone()),
+            overwrite: false,
+            jobs: 2,
+            password: None,
+            entries: vec!["sub/".into()],
+        })
+        .unwrap();
+
+        assert!(!out.join("README.txt").exists());
+        assert_eq!(
+            fs::read_to_string(out.join("sub/data.txt")).unwrap(),
+            "nested\n"
+        );
+    }
+}
+
+#[test]
+fn selection_rejects_missing_entry() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::create_dir_all(&input).unwrap();
+    fs::write(input.join("README.txt"), "hello arca\n").unwrap();
+
+    let archive = dir.path().join("input.zip");
+    compress(base_compress(input, archive.clone())).unwrap();
+
+    let err = test_selection(TestSelectionOptions {
+        archive,
+        jobs: 1,
+        password: None,
+        entries: vec!["missing.txt".into()],
+    })
+    .unwrap_err();
+
+    assert!(
+        matches!(err, arca_core::ArcaError::Usage(_)),
+        "expected usage error, got {err}"
+    );
+}
+
+#[test]
+fn inspect_archive_returns_manifest_summary() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::create_dir_all(input.join("sub")).unwrap();
+    fs::write(input.join("README.txt"), "hello arca\n").unwrap();
+    fs::write(input.join("sub/data.txt"), "nested\n").unwrap();
+
+    let archive = dir.path().join("input.zip");
+    compress(base_compress(input, archive.clone())).unwrap();
+
+    let manifest = inspect_archive(archive.clone()).unwrap();
+    let listed = list(archive).unwrap();
+
+    assert_eq!(manifest.archive_name, "input.zip");
+    assert_eq!(manifest.format_kind, "zip");
+    assert_eq!(manifest.format_suffix, ".zip");
+    assert_eq!(manifest.digest_sha256.len(), 64);
+    assert_eq!(manifest.entry_count, manifest.entries.len());
+    assert_eq!(manifest.entries.len(), listed.len());
+    assert_eq!(manifest.encrypted_entry_count, 0);
+    assert!(manifest.total_uncompressed_size >= "hello arca\nnested\n".len() as u64);
+    assert!(manifest.total_compressed_size.is_some());
+    assert!(manifest.direct_edit.allowed);
+    assert!(
+        manifest
+            .entries
+            .iter()
+            .any(|entry| entry.path.ends_with("README.txt"))
+    );
+}
+
+#[test]
+fn direct_edit_delete_removes_selected_zip_entries() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::create_dir_all(input.join("sub")).unwrap();
+    fs::write(input.join("README.txt"), "hello arca\n").unwrap();
+    fs::write(input.join("sub/data.txt"), "nested\n").unwrap();
+    fs::write(input.join("keep.txt"), "keep\n").unwrap();
+
+    let archive = dir.path().join("input.zip");
+    compress(base_compress(input, archive.clone())).unwrap();
+    let before = inspect_archive(archive.clone()).unwrap();
+
+    let after = delete_selection(DeleteSelectionOptions {
+        archive: archive.clone(),
+        expected_digest_sha256: before.digest_sha256,
+        entries: vec!["sub/".into()],
+    })
+    .unwrap();
+
+    assert!(after.direct_edit.allowed);
+    assert!(after.entries.iter().any(|entry| entry.path == "README.txt"));
+    assert!(after.entries.iter().any(|entry| entry.path == "keep.txt"));
+    assert!(!after.entries.iter().any(|entry| entry.path == "sub/"));
+    assert!(
+        !after
+            .entries
+            .iter()
+            .any(|entry| entry.path == "sub/data.txt")
+    );
+    test(TestOptions {
+        archive: archive.clone(),
+        jobs: 1,
+        password: None,
+    })
+    .unwrap();
+
+    let out = dir.path().join("out");
+    extract(ExtractOptions {
+        archive,
+        output: Some(out.clone()),
+        overwrite: false,
+        jobs: 1,
+        password: None,
+    })
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(out.join("README.txt")).unwrap(),
+        "hello arca\n"
+    );
+    assert_eq!(fs::read_to_string(out.join("keep.txt")).unwrap(), "keep\n");
+    assert!(!out.join("sub").exists());
+}
+
+#[test]
+fn direct_edit_delete_rejects_stale_digest_without_rewriting_zip() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::create_dir_all(&input).unwrap();
+    fs::write(input.join("README.txt"), "hello arca\n").unwrap();
+    fs::write(input.join("keep.txt"), "keep\n").unwrap();
+
+    let archive = dir.path().join("input.zip");
+    compress(base_compress(input, archive.clone())).unwrap();
+
+    let err = delete_selection(DeleteSelectionOptions {
+        archive: archive.clone(),
+        expected_digest_sha256: "0".repeat(64),
+        entries: vec!["keep.txt".into()],
+    })
+    .unwrap_err();
+    assert!(
+        matches!(err, arca_core::ArcaError::Integrity(_)),
+        "expected integrity error, got {err}"
+    );
+
+    let entries = list(archive).unwrap();
+    assert!(entries.iter().any(|entry| entry.path == "README.txt"));
+    assert!(entries.iter().any(|entry| entry.path == "keep.txt"));
+}
+
+#[test]
+fn direct_edit_add_plans_replacements_and_saves_plain_zip() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::create_dir_all(&input).unwrap();
+    fs::write(input.join("README.txt"), "original\n").unwrap();
+    fs::write(input.join("keep.txt"), "keep\n").unwrap();
+
+    let archive = dir.path().join("input.zip");
+    compress(base_compress(input, archive.clone())).unwrap();
+    let before = inspect_archive(archive.clone()).unwrap();
+
+    let additions = dir.path().join("additions");
+    fs::create_dir_all(&additions).unwrap();
+    fs::write(additions.join("README.txt"), "replacement\n").unwrap();
+    fs::write(additions.join("new.txt"), "new\n").unwrap();
+
+    let plan = plan_direct_edit_add(PlanDirectEditAddOptions {
+        archive: archive.clone(),
+        inputs: vec![additions.clone()],
+        pending_delete_entries: Vec::new(),
+        pending_add_entries: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(plan.additions.len(), 1);
+    assert_eq!(plan.additions[0].archive_path, "new.txt");
+    assert_eq!(plan.replacements.len(), 1);
+    assert_eq!(plan.replacements[0].archive_path, "README.txt");
+
+    let add_entries = plan
+        .additions
+        .iter()
+        .chain(plan.replacements.iter())
+        .map(|entry| entry.archive_path.clone())
+        .collect::<Vec<_>>();
+    let replace_entries = plan
+        .replacements
+        .iter()
+        .map(|entry| entry.archive_path.clone())
+        .collect::<Vec<_>>();
+
+    let after = save_direct_edit(DirectEditSaveOptions {
+        archive: archive.clone(),
+        expected_digest_sha256: before.digest_sha256,
+        delete_entries: Vec::new(),
+        add_inputs: vec![additions],
+        add_entries,
+        replace_entries,
+    })
+    .unwrap();
+    assert!(after.entries.iter().any(|entry| entry.path == "README.txt"));
+    assert!(after.entries.iter().any(|entry| entry.path == "keep.txt"));
+    assert!(after.entries.iter().any(|entry| entry.path == "new.txt"));
+    test(TestOptions {
+        archive: archive.clone(),
+        jobs: 1,
+        password: None,
+    })
+    .unwrap();
+
+    let out = dir.path().join("out");
+    extract(ExtractOptions {
+        archive,
+        output: Some(out.clone()),
+        overwrite: false,
+        jobs: 1,
+        password: None,
+    })
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(out.join("README.txt")).unwrap(),
+        "replacement\n"
+    );
+    assert_eq!(fs::read_to_string(out.join("keep.txt")).unwrap(), "keep\n");
+    assert_eq!(fs::read_to_string(out.join("new.txt")).unwrap(), "new\n");
+}
+
+#[test]
+fn direct_edit_add_rejects_conflict_with_pending_addition() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::create_dir_all(&input).unwrap();
+    fs::write(input.join("keep.txt"), "keep\n").unwrap();
+
+    let archive = dir.path().join("input.zip");
+    compress(base_compress(input, archive.clone())).unwrap();
+
+    let first_additions = dir.path().join("first-additions");
+    fs::create_dir_all(&first_additions).unwrap();
+    fs::write(first_additions.join("new.txt"), "first\n").unwrap();
+    let first_plan = plan_direct_edit_add(PlanDirectEditAddOptions {
+        archive: archive.clone(),
+        inputs: vec![first_additions],
+        pending_delete_entries: Vec::new(),
+        pending_add_entries: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(first_plan.additions.len(), 1);
+
+    let second_additions = dir.path().join("second-additions");
+    fs::create_dir_all(&second_additions).unwrap();
+    fs::write(second_additions.join("new.txt"), "second\n").unwrap();
+    let err = plan_direct_edit_add(PlanDirectEditAddOptions {
+        archive,
+        inputs: vec![second_additions],
+        pending_delete_entries: Vec::new(),
+        pending_add_entries: first_plan
+            .additions
+            .iter()
+            .map(|entry| DirectEditPendingEntry {
+                archive_path: entry.archive_path.clone(),
+                entry_type: entry.entry_type.clone(),
+            })
+            .collect(),
+    })
+    .unwrap_err();
+
+    assert!(
+        matches!(err, arca_core::ArcaError::Usage(_)),
+        "expected usage error, got {err}"
+    );
+    assert!(err.to_string().contains("pending changes"));
+}
+
+#[test]
+fn direct_edit_add_rejects_unconfirmed_replacement() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::create_dir_all(&input).unwrap();
+    fs::write(input.join("README.txt"), "original\n").unwrap();
+
+    let archive = dir.path().join("input.zip");
+    compress(base_compress(input, archive.clone())).unwrap();
+    let before = inspect_archive(archive.clone()).unwrap();
+
+    let additions = dir.path().join("additions");
+    fs::create_dir_all(&additions).unwrap();
+    fs::write(additions.join("README.txt"), "replacement\n").unwrap();
+    let plan = plan_direct_edit_add(PlanDirectEditAddOptions {
+        archive: archive.clone(),
+        inputs: vec![additions.clone()],
+        pending_delete_entries: Vec::new(),
+        pending_add_entries: Vec::new(),
+    })
+    .unwrap();
+    assert_eq!(plan.replacements.len(), 1);
+
+    let err = save_direct_edit(DirectEditSaveOptions {
+        archive: archive.clone(),
+        expected_digest_sha256: before.digest_sha256,
+        delete_entries: Vec::new(),
+        add_inputs: vec![additions],
+        add_entries: vec!["README.txt".into()],
+        replace_entries: Vec::new(),
+    })
+    .unwrap_err();
+    assert!(
+        matches!(err, arca_core::ArcaError::Usage(_)),
+        "expected usage error, got {err}"
+    );
+    let out = dir.path().join("out");
+    extract(ExtractOptions {
+        archive,
+        output: Some(out.clone()),
+        overwrite: false,
+        jobs: 1,
+        password: None,
+    })
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(out.join("README.txt")).unwrap(),
+        "original\n"
+    );
+}
+
+#[test]
+fn direct_edit_save_cancellation_after_rewrite_preserves_original_zip() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::create_dir_all(&input).unwrap();
+    fs::write(input.join("README.txt"), "original\n").unwrap();
+    fs::write(input.join("keep.txt"), "keep\n").unwrap();
+
+    let archive = dir.path().join("input.zip");
+    compress(base_compress(input, archive.clone())).unwrap();
+    let before = inspect_archive(archive.clone()).unwrap();
+
+    let additions = dir.path().join("additions");
+    fs::create_dir_all(&additions).unwrap();
+    fs::write(additions.join("README.txt"), "replacement\n").unwrap();
+    fs::write(additions.join("new.txt"), "new\n").unwrap();
+
+    let plan = plan_direct_edit_add(PlanDirectEditAddOptions {
+        archive: archive.clone(),
+        inputs: vec![additions.clone()],
+        pending_delete_entries: Vec::new(),
+        pending_add_entries: Vec::new(),
+    })
+    .unwrap();
+    let add_entries = plan
+        .additions
+        .iter()
+        .chain(plan.replacements.iter())
+        .map(|entry| entry.archive_path.clone())
+        .collect::<Vec<_>>();
+    let replace_entries = plan
+        .replacements
+        .iter()
+        .map(|entry| entry.archive_path.clone())
+        .collect::<Vec<_>>();
+
+    assert_canceled(save_direct_edit_with_context(
+        DirectEditSaveOptions {
+            archive: archive.clone(),
+            expected_digest_sha256: before.digest_sha256.clone(),
+            delete_entries: Vec::new(),
+            add_inputs: vec![additions],
+            add_entries,
+            replace_entries,
+        },
+        cancel_on_phase_after_phase(CoreProgressPhase::Reading, CoreProgressPhase::Writing),
+    ));
+
+    let after = inspect_archive(archive.clone()).unwrap();
+    assert_eq!(after.digest_sha256, before.digest_sha256);
+    assert!(after.entries.iter().any(|entry| entry.path == "README.txt"));
+    assert!(after.entries.iter().any(|entry| entry.path == "keep.txt"));
+    assert!(!after.entries.iter().any(|entry| entry.path == "new.txt"));
+    assert_no_arca_temp_entries(dir.path());
+}
+
+#[test]
+fn direct_edit_save_progress_reports_rewrite_totals() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::create_dir_all(&input).unwrap();
+    fs::write(input.join("README.txt"), "original\n").unwrap();
+
+    let archive = dir.path().join("input.zip");
+    compress(base_compress(input, archive.clone())).unwrap();
+    let before = inspect_archive(archive.clone()).unwrap();
+
+    let additions = dir.path().join("additions");
+    fs::create_dir_all(&additions).unwrap();
+    fs::write(additions.join("new.txt"), "new\n").unwrap();
+    let plan = plan_direct_edit_add(PlanDirectEditAddOptions {
+        archive: archive.clone(),
+        inputs: vec![additions.clone()],
+        pending_delete_entries: Vec::new(),
+        pending_add_entries: Vec::new(),
+    })
+    .unwrap();
+    let add_entries = plan
+        .additions
+        .iter()
+        .map(|entry| entry.archive_path.clone())
+        .collect::<Vec<_>>();
+
+    let (context, events) = recording_context();
+    save_direct_edit_with_context(
+        DirectEditSaveOptions {
+            archive,
+            expected_digest_sha256: before.digest_sha256,
+            delete_entries: Vec::new(),
+            add_inputs: vec![additions],
+            add_entries,
+            replace_entries: Vec::new(),
+        },
+        context,
+    )
+    .unwrap();
+    let events = recorded_events(&events);
+
+    assert!(events.iter().any(|progress| {
+        progress.phase == CoreProgressPhase::Writing
+            && progress.message == "Rewriting ZIP entries"
+            && progress.processed.is_some()
+            && progress.total.is_some()
+    }));
+}
+
+#[test]
+fn container_compress_cancellation_removes_staging_archive() {
+    for suffix in ["zip", "tar", "tar.gz", "tar.bz2", "tar.xz"] {
+        let dir = tempdir().unwrap();
+        let input = write_numbered_input(dir.path(), 4);
+        let archive = dir.path().join(format!("input.{suffix}"));
+
+        assert_canceled(compress_with_context(
+            base_compress(input, archive.clone()),
+            cancel_on_phase(CoreProgressPhase::Writing),
+        ));
+
+        assert!(
+            !archive.exists(),
+            "canceled {suffix} compression should not publish archive"
+        );
+        assert_no_arca_temp_entries(dir.path());
+    }
+}
+
+#[test]
+fn single_stream_compress_cancellation_removes_staging_archive() {
+    for suffix in ["gz", "bz2", "xz"] {
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("data.txt");
+        fs::write(&input, vec![b'a'; 128 * 1024]).unwrap();
+        let archive = dir.path().join(format!("data.txt.{suffix}"));
+
+        assert_canceled(compress_with_context(
+            base_compress(input, archive.clone()),
+            cancel_on_phase(CoreProgressPhase::Writing),
+        ));
+
+        assert!(
+            !archive.exists(),
+            "canceled {suffix} compression should not publish archive"
+        );
+        assert_no_arca_temp_entries(dir.path());
+    }
+}
+
+#[test]
+fn container_extract_cancellation_removes_staging_destination() {
+    for suffix in ["zip", "tar", "tar.gz", "tar.bz2", "tar.xz"] {
+        let dir = tempdir().unwrap();
+        let input = write_numbered_input(dir.path(), 4);
+        let archive = dir.path().join(format!("input.{suffix}"));
+        compress(base_compress(input, archive.clone())).unwrap();
+
+        let out = dir.path().join("out");
+        assert_canceled(extract_with_context(
+            ExtractOptions {
+                archive,
+                output: Some(out.clone()),
+                overwrite: false,
+                jobs: 1,
+                password: None,
+            },
+            cancel_on_phase(CoreProgressPhase::Extracting),
+        ));
+
+        assert!(
+            !out.exists(),
+            "canceled {suffix} extraction should not publish destination"
+        );
+        assert_no_arca_temp_entries(dir.path());
+    }
+}
+
+#[test]
+fn single_stream_extract_cancellation_removes_staging_output() {
+    for suffix in ["gz", "bz2", "xz"] {
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("data.txt");
+        fs::write(&input, vec![b'a'; 128 * 1024]).unwrap();
+        let archive = dir.path().join(format!("data.txt.{suffix}"));
+        compress(base_compress(input, archive.clone())).unwrap();
+
+        let out = dir.path().join("data.out");
+        assert_canceled(extract_with_context(
+            ExtractOptions {
+                archive,
+                output: Some(out.clone()),
+                overwrite: false,
+                jobs: 1,
+                password: None,
+            },
+            cancel_on_phase(CoreProgressPhase::Extracting),
+        ));
+
+        assert!(
+            !out.exists(),
+            "canceled {suffix} extraction should not publish output"
+        );
+        assert_no_arca_temp_entries(dir.path());
+    }
+}
+
+#[test]
+fn zip_list_progress_reports_entry_totals() {
+    let dir = tempdir().unwrap();
+    let input = write_numbered_input(dir.path(), 4);
+    let archive = dir.path().join("input.zip");
+    compress(base_compress(input, archive.clone())).unwrap();
+
+    let (context, events) = recording_context();
+    let entries = list_with_context(archive, context).unwrap();
+    let events = recorded_events(&events);
+
+    assert!(events.iter().any(|progress| {
+        progress.phase == CoreProgressPhase::Scanning
+            && progress.processed.is_some()
+            && progress.total == Some(entries.len() as u64)
+    }));
+}
+
+#[test]
+fn archive_test_progress_uses_testing_phase_with_totals() {
+    for suffix in ["zip", "tar", "tar.gz", "gz"] {
+        let dir = tempdir().unwrap();
+        let input = if suffix == "gz" {
+            let input = dir.path().join("data.txt");
+            fs::write(&input, vec![b'a'; 128 * 1024]).unwrap();
+            input
+        } else {
+            write_numbered_input(dir.path(), 4)
+        };
+        let archive = dir.path().join(format!("input.{suffix}"));
+        compress(base_compress(input, archive.clone())).unwrap();
+
+        let (context, events) = recording_context();
+        test_with_context(
+            TestOptions {
+                archive,
+                jobs: 1,
+                password: None,
+            },
+            context,
+        )
+        .unwrap();
+        let events = recorded_events(&events);
+
+        assert!(
+            events.iter().any(|progress| {
+                progress.phase == CoreProgressPhase::Testing
+                    && progress.processed.is_some()
+                    && progress.total.is_some()
+            }),
+            "{suffix} test should report determinate Testing progress"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|progress| progress.phase == CoreProgressPhase::Writing),
+            "{suffix} test should not report archive payload checks as Writing"
+        );
+    }
+}
+
+#[test]
+fn archive_extract_progress_uses_extracting_phase_with_totals() {
+    for suffix in ["zip", "tar", "tar.gz", "gz"] {
+        let dir = tempdir().unwrap();
+        let input = if suffix == "gz" {
+            let input = dir.path().join("data.txt");
+            fs::write(&input, vec![b'a'; 128 * 1024]).unwrap();
+            input
+        } else {
+            write_numbered_input(dir.path(), 4)
+        };
+        let archive = dir.path().join(format!("input.{suffix}"));
+        compress(base_compress(input, archive.clone())).unwrap();
+
+        let (context, events) = recording_context();
+        extract_with_context(
+            ExtractOptions {
+                archive,
+                output: Some(dir.path().join("out")),
+                overwrite: false,
+                jobs: 1,
+                password: None,
+            },
+            context,
+        )
+        .unwrap();
+        let events = recorded_events(&events);
+
+        assert!(
+            events.iter().any(|progress| {
+                progress.phase == CoreProgressPhase::Extracting
+                    && progress.processed.is_some()
+                    && progress.total.is_some()
+            }),
+            "{suffix} extraction should report determinate Extracting progress"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|progress| progress.phase == CoreProgressPhase::Writing),
+            "{suffix} extraction should not report archive payload copies as Writing"
+        );
+    }
 }
 
 #[test]
@@ -406,6 +1173,35 @@ fn aes_zip_roundtrip() {
 }
 
 #[test]
+fn encrypted_zip_is_not_direct_editable() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("input");
+    fs::create_dir_all(&input).unwrap();
+    fs::write(input.join("secret.txt"), "classified\n").unwrap();
+
+    let archive = dir.path().join("secret.zip");
+    let mut options = base_compress(input, archive.clone());
+    options.encryption = Encryption::Aes256(Password::new(b"secret".to_vec()));
+    compress(options).unwrap();
+
+    let manifest = inspect_archive(archive.clone()).unwrap();
+    assert!(!manifest.direct_edit.allowed);
+    let reason = manifest.direct_edit.reason.as_deref().unwrap_or_default();
+    assert!(reason.contains("Encrypted ZIP"));
+
+    let err = delete_selection(DeleteSelectionOptions {
+        archive,
+        expected_digest_sha256: manifest.digest_sha256,
+        entries: vec!["secret.txt".into()],
+    })
+    .unwrap_err();
+    assert!(
+        matches!(err, arca_core::ArcaError::Unsupported(_)),
+        "expected unsupported error, got {err}"
+    );
+}
+
+#[test]
 fn password_debug_output_is_redacted() {
     let password = Password::new(b"secret".to_vec());
     let rendered = format!("{password:?}");
@@ -649,6 +1445,84 @@ fn zip_compress_accepts_parallel_jobs() {
         password: None,
     })
     .unwrap();
+    assert_numbered_output(&out, 40);
+}
+
+#[test]
+fn zip_parallel_compress_progress_is_aggregate_and_monotonic() {
+    let dir = tempdir().unwrap();
+    let input = write_numbered_input(dir.path(), 40);
+    let archive = dir.path().join("input.zip");
+    let mut options = base_compress(input, archive);
+    options.jobs = 4;
+    options.level = Some(6);
+
+    let (context, events) = recording_context();
+    compress_with_context(options, context).unwrap();
+    let events = recorded_events(&events);
+
+    assert_monotonic_progress(
+        &events,
+        CoreProgressPhase::Writing,
+        "Compressing ZIP file data",
+        numbered_payload_size(40),
+    );
+}
+
+#[test]
+fn zip_parallel_test_and_extract_progress_are_aggregate_and_monotonic() {
+    let dir = tempdir().unwrap();
+    let input = write_numbered_input(dir.path(), 40);
+    let archive = dir.path().join("input.zip");
+    let mut options = base_compress(input, archive.clone());
+    options.jobs = 4;
+    compress(options).unwrap();
+
+    let entries = list(archive.clone()).unwrap();
+    let test_total = entries.len() as u64;
+    let extract_total = entries
+        .iter()
+        .filter(|entry| entry.entry_type != "directory")
+        .count() as u64;
+
+    let (context, events) = recording_context();
+    test_with_context(
+        TestOptions {
+            archive: archive.clone(),
+            jobs: 4,
+            password: None,
+        },
+        context,
+    )
+    .unwrap();
+    let events = recorded_events(&events);
+    assert_monotonic_progress(
+        &events,
+        CoreProgressPhase::Testing,
+        "Testing ZIP entries",
+        test_total,
+    );
+
+    let out = dir.path().join("out");
+    let (context, events) = recording_context();
+    extract_with_context(
+        ExtractOptions {
+            archive,
+            output: Some(out.clone()),
+            overwrite: false,
+            jobs: 4,
+            password: None,
+        },
+        context,
+    )
+    .unwrap();
+    let events = recorded_events(&events);
+    assert_monotonic_progress(
+        &events,
+        CoreProgressPhase::Extracting,
+        "Extracting ZIP entries",
+        extract_total,
+    );
     assert_numbered_output(&out, 40);
 }
 

@@ -1,0 +1,181 @@
+.workspace {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.dropTarget {
+  outline: 2px solid var(--win-accent);
+  outline-offset: -2px;
+}
+
+.tree {
+  min-width: 0;
+  padding: 4px 3px;
+  border-right: 1px solid var(--win-border);
+  background: #f7f7f7;
+  overflow: auto;
+}
+
+.treeRow {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  gap: 6px;
+  min-height: var(--tree-row-height);
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: #2b2b2b;
+  white-space: nowrap;
+}
+
+.selected {
+  border-color: #99d1ff;
+  background: var(--win-selection);
+  color: var(--win-text);
+}
+
+.tablePanel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tableScroll {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--win-panel);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fafafa;
+}
+
+.table th,
+.table td {
+  height: var(--entry-row-height);
+  padding: 0 8px;
+  border-right: 1px solid #ededed;
+  border-bottom: 1px solid #ededed;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table th {
+  height: var(--entry-row-height);
+  border-color: var(--win-border);
+  color: #3b3b3b;
+  font-size: 12px;
+  font-weight: 650;
+  background: #f7f7f7;
+}
+
+.table th:nth-child(1),
+.table td:nth-child(1) {
+  width: 44%;
+}
+
+.table th:nth-child(2),
+.table td:nth-child(2) {
+  width: 16%;
+}
+
+.table th:nth-child(3),
+.table td:nth-child(3),
+.table th:nth-child(4),
+.table td:nth-child(4) {
+  width: 13%;
+}
+
+.table th:nth-child(5),
+.table td:nth-child(5) {
+  width: 14%;
+}
+
+:root[data-show-packed-size="false"] .table th:nth-child(4),
+:root[data-show-packed-size="false"] .table td:nth-child(4),
+:root[data-show-encrypted-column="false"] .table th:nth-child(5),
+:root[data-show-encrypted-column="false"] .table td:nth-child(5) {
+  display: none;
+}
+
+.table tbody tr:hover {
+  background: #f0f6ff;
+}
+
+.columnSort {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  height: calc(var(--entry-row-height) - 1px);
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.columnSort span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.columnSort svg {
+  flex: 0 0 auto;
+  color: #707070;
+}
+
+.columnSortActive svg {
+  color: var(--win-accent);
+}
+
+.columnSort:hover {
+  color: var(--win-accent);
+}
+
+.emptyCell {
+  color: var(--win-muted);
+}
+
+.entryRow {
+  cursor: default;
+}
+
+.entrySelected {
+  background: var(--win-selection);
+}
+
+.entrySelected:hover {
+  background: var(--win-selection-strong);
+}
+
+.entryName {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.entryName svg {
+  flex: 0 0 auto;
+  color: #5c5c5c;
+}
